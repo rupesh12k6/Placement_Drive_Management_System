@@ -1,0 +1,25 @@
+# Dependencies & Build Outputs
+node_modules/
+dist/
+target/
+build/
+.mvn/wrapper/maven-wrapper.jar
+
+# Environment & Logs
+.env
+.env.*
+*.log
+
+# IDEs & Editors
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS Files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,95 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME     = 'placement-frontend'
+        CONTAINER_NAME = 'placement-frontend'
+        HOST_PORT      = '5173'
+        BACKEND_URL    = 'http://host.docker.internal:10000'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'npm ci'
+                    } else {
+                        bat 'npm ci'
+                    }
+                }
+            }
+        }
+
+        stage('Build Production Bundle') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'npm run build'
+                    } else {
+                        bat 'npm run build'
+                    }
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'dist/**', fingerprint: true
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    def cmd = "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} -t ${IMAGE_NAME}:latest ."
+                    if (isUnix()) {
+                        sh cmd
+                    } else {
+                        bat cmd
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Container') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh """
+                            docker rm -f ${CONTAINER_NAME} || true
+                            docker run -d --name ${CONTAINER_NAME} --restart unless-stopped \
+                                -p ${HOST_PORT}:80 \
+                                --add-host=host.docker.internal:host-gateway \
+                                -e BACKEND_URL=${BACKEND_URL} \
+                                ${IMAGE_NAME}:latest
+                        """
+                    } else {
+                        bat """
+                            docker rm -f ${CONTAINER_NAME} 2>nul || exit /b 0
+                            docker run -d --name ${CONTAINER_NAME} --restart unless-stopped ^
+                                -p ${HOST_PORT}:80 ^
+                                -e BACKEND_URL=${BACKEND_URL} ^
+                                ${IMAGE_NAME}:latest
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Frontend deployed successfully on port ${HOST_PORT}."
+        }
+        failure {
+            echo 'Frontend pipeline failed. Check stage logs above.'
+        }
+    }
+}
+

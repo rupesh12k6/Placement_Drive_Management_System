@@ -1,0 +1,131 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME     = 'placement-backend'
+        CONTAINER_NAME = 'placement-backend'
+        HOST_PORT      = '10000'
+        CORS_ORIGINS   = 'http://localhost:5173,http://127.0.0.1:5173'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Test') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'chmod +x mvnw && ./mvnw clean test -B'
+                    } else {
+                        bat 'mvnw.cmd clean test -B'
+                    }
+                }
+            }
+        }
+
+        stage('Package JAR') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh './mvnw package -DskipTests -B'
+                    } else {
+                        bat 'mvnw.cmd package -DskipTests -B'
+                    }
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    def cmd = "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} -t ${IMAGE_NAME}:latest ."
+                    if (isUnix()) {
+                        sh cmd
+                    } else {
+                        bat cmd
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Container') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'SPRING_DATASOURCE_URL',      variable: 'DB_URL'),
+                    string(credentialsId: 'SPRING_DATASOURCE_USERNAME', variable: 'DB_USER'),
+                    string(credentialsId: 'SPRING_DATASOURCE_PASSWORD', variable: 'DB_PASS'),
+                    string(credentialsId: 'APP_JWT_SECRET',             variable: 'JWT_SECRET'),
+                    string(credentialsId: 'CLOUDINARY_CLOUD_NAME',      variable: 'CLD_NAME'),
+                    string(credentialsId: 'CLOUDINARY_API_KEY',         variable: 'CLD_KEY'),
+                    string(credentialsId: 'CLOUDINARY_API_SECRET',      variable: 'CLD_SECRET')
+                ]) {
+                    script {
+                        if (isUnix()) {
+                            sh """
+                                docker rm -f ${CONTAINER_NAME} || true
+                                docker run -d --name ${CONTAINER_NAME} --restart unless-stopped \
+                                    -p ${HOST_PORT}:10000 \
+                                    --add-host=host.docker.internal:host-gateway \
+                                    -e SPRING_DATASOURCE_URL="\$DB_URL" \
+                                    -e SPRING_DATASOURCE_USERNAME="\$DB_USER" \
+                                    -e SPRING_DATASOURCE_PASSWORD="\$DB_PASS" \
+                                    -e APP_JWT_SECRET="\$JWT_SECRET" \
+                                    -e CLOUDINARY_CLOUD_NAME="\$CLD_NAME" \
+                                    -e CLOUDINARY_API_KEY="\$CLD_KEY" \
+                                    -e CLOUDINARY_API_SECRET="\$CLD_SECRET" \
+                                    -e APP_CORS_ALLOWED_ORIGINS="${CORS_ORIGINS}" \
+                                    ${IMAGE_NAME}:latest
+                            """
+                        } else {
+                            bat """
+                                docker rm -f ${CONTAINER_NAME} 2>nul || exit /b 0
+                                docker run -d --name ${CONTAINER_NAME} --restart unless-stopped ^
+                                    -p ${HOST_PORT}:10000 ^
+                                    -e SPRING_DATASOURCE_URL="%DB_URL%" ^
+                                    -e SPRING_DATASOURCE_USERNAME="%DB_USER%" ^
+                                    -e SPRING_DATASOURCE_PASSWORD="%DB_PASS%" ^
+                                    -e APP_JWT_SECRET="%JWT_SECRET%" ^
+                                    -e CLOUDINARY_CLOUD_NAME="%CLD_NAME%" ^
+                                    -e CLOUDINARY_API_KEY="%CLD_KEY%" ^
+                                    -e CLOUDINARY_API_SECRET="%CLD_SECRET%" ^
+                                    -e APP_CORS_ALLOWED_ORIGINS="${CORS_ORIGINS}" ^
+                                    ${IMAGE_NAME}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'sleep 15 && curl -f http://localhost:10000/actuator/health'
+                    } else {
+                        bat 'timeout /t 15 /nobreak >nul && curl -f http://localhost:10000/actuator/health'
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Backend deployed and healthy on port ${HOST_PORT}."
+        }
+        failure {
+            echo 'Backend pipeline failed. Check stage logs above.'
+        }
+    }
+}
+
